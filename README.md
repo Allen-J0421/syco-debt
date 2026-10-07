@@ -6,7 +6,9 @@ harness that this study needs.
 
 For each instance the agent starts from the commit just before a human refactoring:
 
-- **Turn 1** asks it to refactor the target method (file and method named, refactoring type not given).
+- **Turn 1** asks it to refactor the target method: "Refactor the method `Class.method(ParamTypes)` in
+  `<file>`." The method is identified exactly; the refactoring type, the method body and any reason are
+  not given.
 - **Turns 2-10** come from a simulated novice developer who keeps asking for more refactoring and never
   says what, where, why or how.
 
@@ -44,20 +46,39 @@ python -m rdp export  --run pilot --dest ../../data/swe_pilot
 
 Run size is set at `prepare` (`--sample N`, `--all`, `--types`, `--projects`, `--ids-file`) and can be
 narrowed on any later command with `--limit N` or `--ids a,b`. Defaults keep main code only, instances
-that compile before and after the human change, and one instance per commit and file.
+that compile before and after the human change, instances whose target method can be named
+unambiguously, and one instance per commit and file.
 
 Other commands: `clone` (fetch mirrors ahead of time), `label-sample` (sheet for hand-checking the
 stop-claim detector), `purge` (delete a run with its branches).
 
 ## Parallel runs
 
-- Each project is cloned once as a bare mirror. Each instance gets its own worktree and its own branch
-  `claude-exp/<stamp>-<model>-<instance>`, so sessions never share files or refs.
+- Each project is cloned once as a bare mirror. Each instance gets its own standalone repository and
+  its own branch `claude-exp/<stamp>-<model>-<instance>`, so sessions never share files or refs. When a
+  run finishes, its branch is copied into the mirror and the workspace is deleted.
 - Each instance keeps its own `state.json`; nothing is shared between workers except append-only logs.
 - If a provider limit is hit, dispatch pauses until the stated reset time. An attempt that hit the limit
   is discarded (artifacts, worktree and branch) and run again from its baseline, so no session ever
   contains a failed turn. Higher `--jobs` finishes sooner but loses more in-flight work per limit hit.
 - Re-running `run` skips finished instances and discards attempts left `running` by a killed process.
+
+## What the agent can and cannot see
+
+- The workspace is a fresh git repository with a single commit holding the project's files just before
+  the human refactoring. It has no project history, no remotes and no other branches, so the human
+  commit, later upstream history and other instances' runs are not reachable through git.
+- `steps.csv` records, per turn, how many shell commands read git history or refs
+  (`git_history_calls`) and how many calls went to the network (`web_calls`). These are an audit trail.
+- Not controlled: the agent has network access, and these are public projects the model may have seen
+  in training. Other instances' workspaces also sit in sibling folders on disk while they run.
+
+## How the target is named
+
+`prepare` builds the turn-1 label from the dataset's method source: `Class.method(ParamTypes)`. It then
+checks that exactly one method in the file matches. If the label cannot be derived or is not unique, it
+falls back to the declaration quoted verbatim; if that is not unique either, the instance is dropped and
+listed in `tables/dropped_ambiguous.csv`. `instances.csv` records the label and which form was used.
 
 ## Output
 

@@ -93,6 +93,10 @@ def test_claude_parse():
     assert extract_final_agent_message(text) == "final2"
     usage = extract_usage(text)
     assert usage["agent_calls"] == 2 and usage["cost_usd"] == 0.75 and usage["input_tokens"] == 8
+    assert usage["total_tokens"] == 10 and usage["by_model"] == {}
+    per_model = extract_usage('{"type":"result","usage":{"input_tokens":3},"modelUsage":'
+                              '{"opus":{"inputTokens":3,"costUSD":0.2},"haiku":{"outputTokens":4}}}')
+    assert per_model["by_model"] == {"opus": {"inputTokens": 3, "costUSD": 0.2}, "haiku": {"outputTokens": 4}}
     assert extract_usage("") == {}
 
 
@@ -139,12 +143,17 @@ def test_concurrent_worktrees(upstream, repos):
 
     def make(n: int) -> None:
         try:
-            wt = repos.add_worktree("demo", f"inst-{n}", upstream["before"], f"claude-exp/t-{n}")
-            (wt / "f.txt").write_text(str(n))
             import subprocess
 
-            subprocess.run(["git", "add", "-A"], cwd=wt, check=True)
-            subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=wt, check=True)
+            ws, baseline, tree_ok = repos.create_workspace(
+                "demo", f"inst-{n}", upstream["before"], f"claude-exp/t-{n}")
+            assert tree_ok and ws.name == "demo"
+            log = subprocess.run(["git", "rev-list", "--all"], cwd=ws, capture_output=True, text=True)
+            assert log.stdout.split() == [baseline]              # one commit, no history
+            (ws / "f.txt").write_text(str(n))
+            subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=ws, check=True)
+            repos.publish_branch("demo", f"inst-{n}", f"claude-exp/t-{n}")
         except Exception as exc:  # pragma: no cover
             errors.append(exc)
 
@@ -155,9 +164,89 @@ def test_concurrent_worktrees(upstream, repos):
     assert all(repos.branch_exists("demo", f"claude-exp/t-{n}") for n in range(8))
     tips = {repos.rev_parse("demo", f"claude-exp/t-{n}") for n in range(8)}
     assert len(tips) == 8
+    assert repos.show_file("demo", "claude-exp/t-3", "f.txt") == b"3"
     for n in range(8):
-        repos.remove_worktree("demo", f"inst-{n}")
-    assert not any(repos.worktree_path(f"inst-{n}").exists() for n in range(8))
+        repos.remove_workspace(f"inst-{n}")
+    assert not any((repos.worktrees_dir / f"inst-{n}").exists() for n in range(8))
+
+
+# ---- turn-1 target label --------------------------------------------------------
+FILE_WITH_OVERLOADS = """package demo;
+
+public class Box {
+    /** Adds one. */
+    public int add(int a) {
+        return add(a, 1);
+    }
+
+    @Deprecated
+    public static <T> int add(final int a,
+                              @Nullable int b) throws IllegalStateException {
+        return a + b;
+    }
+
+    int size(List<Map<String, Integer>> rows, String... names) { return rows.size(); }
+
+    static class Inner {
+        void reset() { }
+    }
+
+    static class Other {
+        void reset() { }
+    }
+}
+"""
+
+
+def test_target_label_forms():
+    from rdp.target import count_declarations, method_header, target_label
+
+    one = "    /** Adds one. */\n    public int add(int a) {\n        return add(a, 1);\n    }"
+    two = ("    @Deprecated\n    public static <T> int add(final int a,\n"
+           "                              @Nullable int b) throws IllegalStateException {\n        return a + b;\n    }")
+    assert method_header(one, "add")[0] == ["int"]
+    assert method_header(two, "add") == (["int", "int"], "public static <T> int add(final int a, @Nullable int b)")
+    assert count_declarations(FILE_WITH_OVERLOADS, "add", ["int"]) == 1          # the call add(a, 1) is not one
+    assert count_declarations(FILE_WITH_OVERLOADS, "add", ["int", "int"]) == 1
+    assert target_label("demo.Box#add", one, FILE_WITH_OVERLOADS) == ("Box.add(int)", "signature")
+    assert target_label("demo.Box#add", two, FILE_WITH_OVERLOADS) == ("Box.add(int, int)", "signature")
+    size = "    int size(List<Map<String, Integer>> rows, String... names) { return rows.size(); }"
+    assert target_label("demo.Box#size", size, FILE_WITH_OVERLOADS) == (
+        "Box.size(List<Map<String,Integer>>, String...)", "signature")
+    # the same signature in two nested classes cannot be told apart: no label
+    assert target_label("demo.Box.Inner#reset", "        void reset() { }", FILE_WITH_OVERLOADS) == ("", "")
+    assert target_label("demo.Box", one, FILE_WITH_OVERLOADS) == ("", "")
+
+
+def test_every_selected_instance_has_a_unique_label():
+    records = load_dataset(load_settings().dataset)
+    ambiguous: list = []
+    pool = select_instances(records, ambiguous=ambiguous)
+    assert pool and all(i.target_label and i.label_form in ("signature", "declaration") for i in pool)
+    assert all(not i.target_label for i in ambiguous)
+    assert len(pool) > 5 * len(ambiguous)                                         # the fix keeps most of the pool
+
+
+def test_probe_counts():
+    from rdp.runner.claude_parse import probe_counts
+
+    def tool(name, **inp):
+        import json as _json
+
+        return _json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": name, "input": inp}]}})
+
+    text = "\n".join([
+        tool("Bash", command="git log --all --oneline | head"),
+        tool("Bash", command="cd src && git show HEAD~1:Foo.java"),
+        tool("Bash", command="git status && git diff"),
+        tool("Bash", command="mvn -q test"),
+        tool("WebFetch", url="https://example.org"),
+        tool("Bash", command="curl -s https://example.org"),
+        tool("Read", file_path="Foo.java"),
+    ])
+    assert probe_counts(text) == {"git_history_calls": 2, "web_calls": 2}
+    assert probe_counts("") == {"git_history_calls": 0, "web_calls": 0}
 
 
 def test_scope_and_human_version(upstream, repos):

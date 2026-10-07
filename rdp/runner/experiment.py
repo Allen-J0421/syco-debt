@@ -12,7 +12,7 @@ from pathlib import Path
 from rdp.instances import Instance
 from rdp.repos import RepoCache
 from rdp.runner.artifacts import append_clarification_reply, append_prompt_turn, write_step_artifacts
-from rdp.runner.claude_parse import extract_final_agent_message
+from rdp.runner.claude_parse import extract_final_agent_message, probe_counts
 from rdp.runner.git_repo import GitRepository
 from rdp.runner.iteration import run_iteration
 from rdp.runner.limit_detect import LimitDetectConfig, ProviderLimitError
@@ -85,9 +85,9 @@ def discard_run(ctx: RunContext, inst: Instance, state: InstanceState, *, reason
     if state.stamp:
         RunPaths(instance_dir(ctx.run_dir, inst.instance_id), state.stamp,
                  sanitize_slug(ctx.model), ctx.prompter_label).remove_outputs()
-    ctx.repos.remove_worktree(inst.project, inst.instance_id)
+    ctx.repos.remove_workspace(inst.instance_id)
     if state.branch:
-        ctx.repos.delete_branch(inst.project, state.branch)
+        ctx.repos.delete_branch(inst.project, state.branch)   # present only if it had been published
         state.discarded.append({"stamp": state.stamp, "branch": state.branch, "reason": reason})
     state.stamp = state.branch = state.baseline_sha = ""
     state.turns_done = state.agent_failures = state.prompter_fallbacks = 0
@@ -108,13 +108,15 @@ def run_instance(ctx: RunContext, inst: Instance, state: InstanceState) -> Insta
 
     try:
         parent = ctx.repos.parent_of(inst.project, inst.commit_id)
-        worktree = ctx.repos.add_worktree(inst.project, inst.instance_id, parent, branch)
+        # A standalone repository with one commit: no history for the agent to read the answer from.
+        worktree, prev_sha, tree_ok = ctx.repos.create_workspace(
+            inst.project, inst.instance_id, parent, branch)
         git = GitRepository(worktree)
-        prev_sha = git.head_sha()
-        state.baseline_sha = prev_sha
+        state.baseline_sha, state.baseline_tree_matches = prev_sha, tree_ok
         save_state(ctx.run_dir, state)
 
-        first_request = render_turn1(ctx.turn1_template, file=inst.target_file, method=inst.method)
+        first_request = render_turn1(ctx.turn1_template, file=inst.target_file,
+                                     target=inst.target_label or inst.method)
         source = ctx.prompt_source_factory(first_request)
         source.prepare(target_path=inst.target_file, target_text=git.file_text(prev_sha, inst.target_file))
         agent = ctx.agent_factory(worktree)
@@ -167,6 +169,7 @@ def run_instance(ctx: RunContext, inst: Instance, state: InstanceState) -> Insta
                     "clarification_followup": int(result.clarification_followup),
                     "prompt_source": turn.source, "prompter_fallback": int(fallback),
                     "prompt": turn.prompt,
+                    **probe_counts(result.jsonl_text),
                     **{f"usage_{k}": v for k, v in result.usage.items()},
                 }
                 turns_file.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -194,12 +197,22 @@ def run_instance(ctx: RunContext, inst: Instance, state: InstanceState) -> Insta
     except Exception as exc:
         state.status, state.error, state.finished_at = "failed", f"{type(exc).__name__}: {exc}", utc_iso()
         save_state(ctx.run_dir, state)
+        try:                                   # keep whatever was committed, for diagnosis
+            ctx.repos.publish_branch(inst.project, inst.instance_id, branch)
+        except Exception:
+            pass
         if not ctx.keep_worktree:
-            ctx.repos.remove_worktree(inst.project, inst.instance_id)
+            ctx.repos.remove_workspace(inst.instance_id)
         return state
 
+    try:
+        ctx.repos.publish_branch(inst.project, inst.instance_id, branch)
+    except Exception as exc:
+        state.status, state.error, state.finished_at = "failed", f"publish failed: {exc}", utc_iso()
+        save_state(ctx.run_dir, state)
+        return state                           # workspace is kept so the commits are not lost
     if not ctx.keep_worktree:
-        ctx.repos.remove_worktree(inst.project, inst.instance_id)
+        ctx.repos.remove_workspace(inst.instance_id)
     if state.agent_failures >= ctx.turns:
         state.status, state.error = "failed", "every turn failed (agent did not exit successfully)"
     else:

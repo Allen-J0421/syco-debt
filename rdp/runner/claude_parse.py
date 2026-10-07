@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator
 
 
@@ -65,6 +66,39 @@ def extract_final_agent_message(jsonl_text: str) -> str:
     return last or ""
 
 
+_GIT_HISTORY_RE = re.compile(
+    r"\bgit\b[^|;&\n]*?\s(log|show|reflog|fetch|pull|clone|remote|blame|ls-remote|rev-list|cat-file|for-each-ref|branch)\b"
+)
+_WEB_CMD_RE = re.compile(r"\b(curl|wget|gh)\s")
+_WEB_TOOLS = {"WebFetch", "WebSearch"}
+
+
+def probe_counts(jsonl_text: str) -> dict:
+    """How often the agent looked outside the code it was given during one turn.
+
+    git_history_calls: shell commands that read git history, refs or remotes.
+    web_calls: web tools, or shell commands that fetch from the network.
+    The workspace has no history to find, so these are an audit trail, not a control."""
+    git_calls = web_calls = 0
+    for obj in iter_jsonl_objects(jsonl_text):
+        if obj.get("type") != "assistant":
+            continue
+        content = (obj.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if block.get("name") in _WEB_TOOLS:
+                web_calls += 1
+                continue
+            command = (block.get("input") or {}).get("command")
+            if isinstance(command, str):
+                git_calls += len(_GIT_HISTORY_RE.findall(command))
+                web_calls += len(_WEB_CMD_RE.findall(command))
+    return {"git_history_calls": git_calls, "web_calls": web_calls}
+
+
 _USAGE_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 
 
@@ -72,6 +106,7 @@ def extract_usage(jsonl_text: str) -> dict:
     """Sum resource use over every ``result`` line of a turn (two when a clarification follow-up ran)."""
     out: dict = {"agent_calls": 0, "cost_usd": 0.0, "api_duration_ms": 0, "agent_turns": 0}
     out.update({k: 0 for k in _USAGE_KEYS})
+    by_model: dict[str, dict] = {}     # the CLI also reports use per model (helper models included)
     seen = False
     for obj in iter_jsonl_objects(jsonl_text):
         if obj.get("type") != "result":
@@ -91,4 +126,15 @@ def extract_usage(jsonl_text: str) -> dict:
                 value = usage.get(key)
                 if isinstance(value, (int, float)):
                     out[key] += int(value)
+        model_usage = obj.get("modelUsage")
+        if isinstance(model_usage, dict):
+            for model, fields in model_usage.items():
+                if not isinstance(fields, dict):
+                    continue
+                slot = by_model.setdefault(str(model), {})
+                for key, value in fields.items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        slot[key] = slot.get(key, 0) + value
+    out["total_tokens"] = sum(out[k] for k in _USAGE_KEYS)
+    out["by_model"] = by_model
     return out if seen else {}

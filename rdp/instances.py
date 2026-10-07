@@ -10,6 +10,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+from rdp.target import target_label
 from rdp.util import atomic_write_text, sanitize_slug
 
 # Upstream repositories of the 18 SWE-Refactor projects.
@@ -51,6 +52,10 @@ class Instance:
     compile_jdk: str
     compile_command: str
     is_test_code: bool
+    # How turn 1 names the target: `Class.method(Types)` ("signature") or the declaration quoted
+    # verbatim ("declaration"). Empty when no label identifies exactly one method in the file.
+    target_label: str = ""
+    label_form: str = ""
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -95,7 +100,12 @@ def record_to_instance(rec: dict) -> Instance:
     for loc in rec.get("diffLocations") or []:
         if isinstance(loc, dict) and loc.get("filePath"):
             human_files.add(loc["filePath"])
+    label, form = target_label(
+        qualified, rec.get("sourceCodeBeforeRefactoring") or "", rec.get("sourceCodeBeforeForWhole") or ""
+    )
     return Instance(
+        target_label=label,
+        label_form=form,
         instance_id=make_instance_id(project, rec["commitId"], rec["uniqueId"]),
         unique_id=rec["uniqueId"],
         project=project,
@@ -126,8 +136,12 @@ def select_instances(
     types: set[str] | None = None,
     projects: set[str] | None = None,
     ids: set[str] | None = None,
+    ambiguous: list[Instance] | None = None,
 ) -> list[Instance]:
-    """Apply the default filters. Order is deterministic (sorted by instance id)."""
+    """Apply the default filters. Order is deterministic (sorted by instance id).
+
+    Instances whose target method cannot be named unambiguously are always dropped; pass a list
+    as `ambiguous` to collect them."""
     out: list[Instance] = []
     seen_commit_file: set[tuple[str, str]] = set()
     for rec in sorted(records, key=lambda r: r["uniqueId"]):
@@ -145,6 +159,10 @@ def select_instances(
         if projects and inst.project not in projects:
             continue
         if ids and inst.instance_id not in ids and inst.unique_id not in ids:
+            continue
+        if not inst.target_label:
+            if ambiguous is not None:
+                ambiguous.append(inst)
             continue
         key = (inst.commit_id, inst.target_file)
         if one_per_commit_file:
@@ -192,7 +210,7 @@ def read_manifest(path: Path) -> list[Instance]:
 
 INSTANCE_COLUMNS = [
     "instance_id", "unique_id", "project", "commit_id", "refactoring_type", "target_file",
-    "file_after", "method", "method_qualified", "compile_jdk", "is_test_code",
+    "file_after", "method", "method_qualified", "target_label", "label_form", "compile_jdk", "is_test_code",
 ]
 
 

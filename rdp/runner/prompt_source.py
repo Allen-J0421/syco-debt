@@ -12,8 +12,9 @@ from rdp.runner.models import PrompterConfig, PrompterTurnInput, PromptTurn
 from rdp.runner.prompter import GeminiPrompter
 
 
-def render_turn1(template: str, *, file: str, method: str) -> str:
-    return template.strip().format(file=file, method=method)
+def render_turn1(template: str, *, file: str, target: str) -> str:
+    """`target` identifies exactly one method: `Class.method(Types)` or its declaration."""
+    return template.strip().format(file=file, target=target)
 
 
 class PromptSource(Protocol):

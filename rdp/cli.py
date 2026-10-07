@@ -93,8 +93,10 @@ def cmd_prepare(args) -> int:
     ids = None
     if args.ids_file:
         ids = {line.strip() for line in Path(args.ids_file).read_text().splitlines() if line.strip()}
+    ambiguous: list[Instance] = []
     pool = select_instances(
         load_dataset(settings.dataset),
+        ambiguous=ambiguous,
         include_test_code=args.include_test_code,
         one_per_commit_file=not args.allow_same_file,
         types=set(args.types.split(",")) if args.types else None,
@@ -111,6 +113,12 @@ def cmd_prepare(args) -> int:
     print(f"eligible: {len(pool)}   selected: {len(chosen)}   projects: {len({i.project for i in chosen})}")
     for name, n in sorted(by_type.items(), key=lambda kv: -kv[1]):
         print(f"  {n:4d}  {name}")
+    by_form = {f: sum(1 for i in chosen if i.label_form == f) for f in ("signature", "declaration")}
+    print(f"turn-1 target named by signature: {by_form['signature']}, by quoted declaration: {by_form['declaration']}")
+    if ambiguous:
+        dropped = run_dir / "tables" / "dropped_ambiguous.csv"
+        write_instances_csv(dropped, ambiguous)
+        print(f"dropped, target method not uniquely identifiable: {len(ambiguous)} (listed in {dropped})")
     print(f"manifest: {manifest}")
     return 0
 
@@ -312,9 +320,9 @@ def cmd_purge(args) -> int:
     n = 0
     for inst in _manifest(settings, args):
         st = load_state(run_dir, inst.instance_id)
+        repos.remove_workspace(inst.instance_id)
         if not (repos.mirror_path(inst.project) / "HEAD").is_file():
             continue
-        repos.remove_worktree(inst.project, inst.instance_id)
         for branch in [st.branch] + [d.get("branch", "") for d in st.discarded]:
             if branch and repos.branch_exists(inst.project, branch):
                 repos.delete_branch(inst.project, branch)

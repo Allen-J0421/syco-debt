@@ -31,7 +31,7 @@ FAST = PauseConfig(buffer_minutes=0, fixed_wait_minutes=0.01, max_wait_minutes=1
 def make_ctx(tmp_path: Path, repos, turns: int) -> RunContext:
     return RunContext(
         run_dir=tmp_path / "home" / "runs" / "t", repos=repos, model="claude-opus-4-8", turns=turns,
-        turn1_template="Refactor the method `{method}` in `{file}`.", prompter_label="fixed",
+        turn1_template="Refactor the method `{target}` in `{file}`.", prompter_label="fixed",
         agent_factory=lambda wd: ClaudeAgent(wd, "claude-opus-4-8", timeout=60, effort="high"),
         prompt_source_factory=lambda first: FixedPromptSource(first, "refactor"),
         clarification_patterns=PATTERNS, limit_cfg=LimitDetectConfig(),
@@ -68,7 +68,7 @@ def test_parallel_run_with_limit_pause(tmp_path, upstream, repos, fake_claude, m
         run_dirs = sorted(p.name for p in (idir / logs[0].name.replace("-log.csv", "")).iterdir())
         assert run_dirs == ["run_001", "run_002", "run_003", "run_004"]
         assert repos.branch_exists("demo", st.branch)
-        assert not repos.worktree_path(inst.instance_id).exists()
+        assert not (repos.worktrees_dir / inst.instance_id).exists()
         branches.add(st.branch)
         # every commit on the branch touches only this instance's edits
         text = repos.show_file("demo", st.branch, TARGET).decode()
@@ -123,8 +123,10 @@ def test_signals_tables_and_self_commit(tmp_path, upstream, repos, fake_claude, 
     assert steps[6]["exit_code"] == "7"
     assert steps[1]["prompt_source"] == "template" and steps[2]["prompt_source"] == "fixed"
     assert float(steps[5]["usage_cost_usd"]) == 0.02            # two agent calls in the follow-up turn
-    assert "`sum`" in read_jsonl(next((ctx.run_dir / "instances" / inst.instance_id / "logs")
-                                      .glob("*-turns.jsonl")))[0]["prompt"]
+    assert steps[1]["usage_total_tokens"] == "15" and steps[5]["usage_total_tokens"] == "30"
+    first = read_jsonl(next((ctx.run_dir / "instances" / inst.instance_id / "logs").glob("*-turns.jsonl")))[0]
+    assert first["prompt"] == f"Refactor the method `Calc.sum(int, int)` in `{TARGET}`."
+    assert steps[1]["git_history_calls"] == "0" and steps[1]["web_calls"] == "0"
 
     sig = rows(tables / "signals.csv")[0]
     assert (sig["t_star"], sig["never_stopped"], sig["relapsed"]) == ("2", "0", "1")
@@ -144,6 +146,32 @@ def test_signals_tables_and_self_commit(tmp_path, upstream, repos, fake_claude, 
     turns = read_jsonl(next((ctx.run_dir / "instances" / inst.instance_id / "logs").glob("*-turns.jsonl")))
     assert turns[3]["parent_sha"] == turns[2]["commit_sha"]
     assert repos.rev_parse("demo", st.branch) == turns[-1]["commit_sha"]
+
+
+def test_agent_cannot_reach_project_history(tmp_path, upstream, repos, fake_claude, monkeypatch):
+    """The workspace holds one baseline commit: no upstream history, remotes or other runs."""
+    monkeypatch.setenv("FAKE_CLAUDE_PLAN", "edit,probe")
+    monkeypatch.setenv("FAKE_UPSTREAM_SHA", upstream["human"])
+    repos.ensure_mirror("demo", upstream["url"], commits=[upstream["human"]])
+    instances = [make_instance(upstream, n) for n in range(2)]
+    ctx = make_ctx(tmp_path, repos, turns=2)
+    assert run_all(ctx, instances, jobs=2, pause=FAST) == {"done": 2}
+
+    for inst in instances:
+        st = load_state(ctx.run_dir, inst.instance_id)
+        assert st.baseline_tree_matches is True              # same files as the upstream starting point
+        assert st.baseline_sha != upstream["before"]         # ...but a fresh commit with no ancestry
+        idir = ctx.run_dir / "instances" / inst.instance_id
+        run_dir = next(p for p in idir.iterdir() if p.is_dir() and p.name != "logs")
+        seen = json.loads(read_jsonl(run_dir / "run_002" / "claude.jsonl")[-1]["result"])
+        turns = read_jsonl(next((idir / "logs").glob("*-turns.jsonl")))
+        assert seen["upstream_commit_found"] is False
+        assert seen["remotes"] == []
+        assert seen["branches"] == [f"refs/heads/{st.branch}"]
+        assert sorted(seen["commits"]) == sorted([st.baseline_sha, turns[0]["commit_sha"]])
+        # after the run the branch is in the mirror, next to upstream history, for later stages
+        assert repos.rev_parse("demo", st.branch) == turns[-1]["commit_sha"]
+        assert repos.show_file("demo", st.baseline_sha, TARGET) == repos.show_file("demo", upstream["before"], TARGET)
 
 
 class StubServer:

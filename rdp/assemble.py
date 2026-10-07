@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import random
 from pathlib import Path
 
@@ -33,10 +34,11 @@ STEP_COLUMNS = [
     "target_files_changed", "target_lines_added", "target_lines_deleted", "target_lines_total",
     "stop", "stop_claim", "claim_categories", "refusal_edit", "post_stop", "post_stop_edit",
     "clarification_followup", "prompt_source", "prompter_fallback",
+    "git_history_calls", "web_calls",
     "duration_s", "exit_code", "timed_out",
     "usage_agent_calls", "usage_agent_turns", "usage_input_tokens", "usage_output_tokens",
-    "usage_cache_creation_input_tokens", "usage_cache_read_input_tokens", "usage_cost_usd",
-    "usage_api_duration_ms",
+    "usage_cache_creation_input_tokens", "usage_cache_read_input_tokens", "usage_total_tokens",
+    "usage_cost_usd", "usage_api_duration_ms", "usage_by_model",
 ]
 SIGNAL_COLUMNS = [
     "instance_id", "project", "refactoring_type", "model", "stamp", "num_turns", "t_star",
@@ -114,6 +116,8 @@ def assemble(settings: Settings, run_dir: Path, instances: list[Instance]) -> di
         for rec in data.turns:
             sig = by_turn.get(int(rec["turn"]))
             row = dict(rec)
+            if isinstance(row.get("usage_by_model"), dict):
+                row["usage_by_model"] = json.dumps(row["usage_by_model"], sort_keys=True)
             if sig is not None:
                 row.update(stop=int(sig.stop), stop_claim=int(sig.stop_claim),
                            claim_categories="|".join(sig.claim_categories),

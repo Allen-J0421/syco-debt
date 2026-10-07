@@ -1,12 +1,19 @@
-"""Bare mirrors (one per project) and per-instance worktrees.
+"""Bare mirrors (one per project) and an isolated workspace per instance.
 
-Parallel safety: every instance works in its own worktree on its own branch, so concurrent
-commits never touch the same ref. Only worktree add/remove/prune share metadata in the mirror
-and are serialised by a per-project lock. Background gc is disabled in the mirrors.
+Isolation: the agent works in a standalone repository that holds a single commit with the
+files of the starting point. It has no project history, no remotes and no other branches, so
+the human refactoring commit, later upstream history and other instances' runs cannot be read
+from git. When a run finishes, its branch is fetched into the mirror, where later stages read
+every version by commit.
+
+Parallel safety: workspaces are separate repositories, so running instances share nothing.
+Only the final fetch into a mirror is serialised, by a per-project lock. Background gc is
+disabled in the mirrors.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -17,8 +24,9 @@ class GitError(RuntimeError):
     pass
 
 
-def _git(args: list[str], *, cwd: Path | None = None, check: bool = True, timeout: int | None = None):
-    proc = run_text_command(["git", *args], cwd=cwd, timeout=timeout)
+def _git(args: list[str], *, cwd: Path | None = None, check: bool = True, timeout: int | None = None,
+         env: dict[str, str] | None = None):
+    proc = run_text_command(["git", *args], cwd=cwd, timeout=timeout, env=env)
     if check and proc.returncode != 0:
         raise GitError(f"git {' '.join(args)} failed in {cwd}:\n{proc.stderr.strip()}")
     return proc
@@ -66,31 +74,50 @@ class RepoCache:
     def parent_of(self, project: str, commit: str) -> str:
         return self.rev_parse(project, f"{commit}^")
 
-    # ---- worktrees --------------------------------------------------------------
-    def worktree_path(self, instance_id: str) -> Path:
-        return self.worktrees_dir / instance_id
+    # ---- isolated workspaces ----------------------------------------------------
+    def workspace_path(self, instance_id: str, project: str) -> Path:
+        """The agent's working directory. Named after the project, inside a per-instance folder."""
+        return self.worktrees_dir / instance_id / project
 
-    def add_worktree(self, project: str, instance_id: str, start_commit: str, branch: str) -> Path:
-        """Fresh worktree at start_commit on a new branch. Replaces any leftover of this instance."""
+    def create_workspace(
+        self, project: str, instance_id: str, start_commit: str, branch: str
+    ) -> tuple[Path, str, bool]:
+        """Standalone repository whose only commit holds the files of `start_commit`.
+
+        Returns (path, baseline commit, whether the baseline tree equals the upstream tree).
+        Any leftover workspace of this instance is replaced."""
         mirror = self.mirror_path(project)
-        wt = self.worktree_path(instance_id)
-        with self._lock(project):
-            self._remove_worktree_locked(mirror, wt)
-            self.worktrees_dir.mkdir(parents=True, exist_ok=True)
-            _git(["worktree", "add", "--quiet", "-b", branch, str(wt), start_commit], cwd=mirror)
-        _git(["config", "user.name", "rdp"], cwd=wt, check=False)
-        _git(["config", "user.email", "rdp@localhost"], cwd=wt, check=False)
-        return wt
+        ws = self.workspace_path(instance_id, project)
+        self.remove_workspace(instance_id)
+        ws.mkdir(parents=True)
+        # Check the files out of the mirror with a private index: nothing in the mirror is written.
+        index = ws.parent / ".checkout-index"
+        env = dict(os.environ, GIT_INDEX_FILE=str(index))
+        base = ["--git-dir", str(mirror), "--work-tree", str(ws)]
+        try:
+            _git([*base, "read-tree", start_commit], env=env)
+            _git([*base, "checkout-index", "-a", "-f"], env=env)
+        finally:
+            index.unlink(missing_ok=True)
+        _git(["init", "--quiet", "-b", branch], cwd=ws)
+        _git(["config", "user.name", "rdp"], cwd=ws)
+        _git(["config", "user.email", "rdp@localhost"], cwd=ws)
+        _git(["config", "gc.auto", "0"], cwd=ws)
+        _git(["add", "-A", "-f"], cwd=ws)          # -f: also files the project itself ignores but tracks
+        _git(["commit", "--quiet", "--no-verify", "--allow-empty", "-m", "baseline"], cwd=ws)
+        baseline = _git(["rev-parse", "HEAD"], cwd=ws).stdout.strip()
+        tree = _git(["rev-parse", "HEAD^{tree}"], cwd=ws).stdout.strip()
+        return ws, baseline, tree == self.tree_sha(project, start_commit)
 
-    def _remove_worktree_locked(self, mirror: Path, wt: Path) -> None:
-        if wt.exists():
-            _git(["worktree", "remove", "--force", str(wt)], cwd=mirror, check=False)
-            shutil.rmtree(wt, ignore_errors=True)
-        _git(["worktree", "prune"], cwd=mirror, check=False)
-
-    def remove_worktree(self, project: str, instance_id: str) -> None:
+    def publish_branch(self, project: str, instance_id: str, branch: str) -> None:
+        """Copy the finished run's branch from its workspace into the mirror."""
+        ws = self.workspace_path(instance_id, project)
         with self._lock(project):
-            self._remove_worktree_locked(self.mirror_path(project), self.worktree_path(instance_id))
+            _git(["fetch", "--quiet", "--no-tags", str(ws), f"+refs/heads/{branch}:refs/heads/{branch}"],
+                 cwd=self.mirror_path(project))
+
+    def remove_workspace(self, instance_id: str) -> None:
+        shutil.rmtree(self.worktrees_dir / instance_id, ignore_errors=True)
 
     def delete_branch(self, project: str, branch: str) -> None:
         with self._lock(project):

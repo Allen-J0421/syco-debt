@@ -23,6 +23,7 @@ class InstanceState:
     stamp: str = ""
     branch: str = ""
     baseline_sha: str = ""
+    baseline_tree_matches: bool | None = None   # workspace baseline has the same tree as upstream
     turns_done: int = 0
     agent_failures: int = 0
     prompter_fallbacks: int = 0

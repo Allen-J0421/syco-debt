@@ -72,6 +72,7 @@ def make_instance(upstream: dict, n: int, project: str = "demo") -> Instance:
         commit_id=upstream["human"], refactoring_type="Extract Method", target_file=TARGET,
         file_after=TARGET, method="sum", method_qualified="demo.Calc#sum", human_files=(TARGET,),
         compile_jdk="17", compile_command="true", is_test_code=False,
+        target_label="Calc.sum(int, int)", label_form="signature",
     )
 
 

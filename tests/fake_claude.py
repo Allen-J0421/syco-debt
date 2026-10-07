@@ -82,6 +82,16 @@ elif action == "selfcommit":
     edit()
     subprocess.run(["git", "add", "-A"], check=True)
     subprocess.run(["git", "commit", "-q", "-m", "agent's own commit"], check=True)
+elif action == "probe":
+    # Look for anything beyond the given code: history, remotes, and a known upstream commit.
+    def out(*cmd):
+        return subprocess.run(cmd, capture_output=True, text=True).stdout.split()
+
+    known = os.environ.get("FAKE_UPSTREAM_SHA", "")
+    found = subprocess.run(["git", "cat-file", "-e", f"{known}^{{commit}}"], capture_output=True).returncode == 0
+    text = json.dumps({"commits": out("git", "rev-list", "--all"), "remotes": out("git", "remote"),
+                       "branches": out("git", "for-each-ref", "--format=%(refname)"),
+                       "upstream_commit_found": found})
 elif action == "ask":
     state["asked"] = True
     text = "Could you tell me which part matters most to you?"
