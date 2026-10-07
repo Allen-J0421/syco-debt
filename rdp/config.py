@@ -86,7 +86,22 @@ def load_settings(config_path: Path | None = None, *, home: str | None = None) -
     paths = raw.get("paths", {})
     home_raw = home or os.environ.get("RDP_HOME") or paths.get("home", "~/rdp")
     home_path = Path(home_raw).expanduser().resolve()
-    dataset = Path(paths.get("dataset", "../SWE-Refactor/pure_refactoring_data.json")).expanduser()
+    dataset_raw = os.environ.get("RDP_DATASET") or paths.get("dataset")
+    if not dataset_raw:
+        raise ValueError("RDP_DATASET is not set; add the dataset path to .env")
+    dataset = Path(dataset_raw).expanduser()
     if not dataset.is_absolute():
         dataset = (PROJECT_ROOT / dataset).resolve()
+
+    # JDK locations are machine-specific.  Keep them in .env rather than in
+    # the checked-in configuration, while preserving config-file overrides for
+    # deployments that deliberately use one.
+    measure = raw.setdefault("measure", {})
+    if jdk17 := os.environ.get("RDP_JDK17_HOME"):
+        measure["jdk17_home"] = jdk17
+    verify = raw.setdefault("verify", {})
+    jdk_homes = verify.setdefault("jdk_homes", {})
+    for version in ("8", "11", "17", "21"):
+        if jdk_home := os.environ.get(f"RDP_JDK{version}_HOME"):
+            jdk_homes[version] = jdk_home
     return Settings(raw=raw, home=home_path, dataset=dataset, config_dir=path.parent)

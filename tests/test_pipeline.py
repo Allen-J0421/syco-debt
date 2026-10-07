@@ -207,10 +207,10 @@ def test_measure_assemble_and_verify(tmp_path, upstream, repos, fake_claude, mon
     jdk = tmp_path / "jdk17"
     (jdk / "bin").mkdir(parents=True)
     (jdk / "bin" / "java").write_text("#!/bin/sh\n")
+    monkeypatch.setenv("RDP_JDK17_HOME", str(jdk))
     cfg = tmp_path / "run.toml"
     base = (Path(__file__).resolve().parent.parent / "config" / "run.toml").read_text()
-    cfg.write_text(base.replace('"17" = "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"',
-                                f'"17" = "{jdk}"'))
+    cfg.write_text(base)
     settings = load_settings(cfg, home=str(home))
     object.__setattr__(settings, "config_dir", Path(__file__).resolve().parent.parent / "config")
 

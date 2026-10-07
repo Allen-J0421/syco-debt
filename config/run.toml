@@ -4,8 +4,7 @@
 # Heavy runtime data (repo mirrors, worktrees, SonarQube, run artifacts). Keep it out of
 # iCloud Drive and out of any path with spaces. The RDP_HOME environment variable overrides it.
 home = "~/rdp"
-# SWE-Refactor instance file, relative to this project unless absolute.
-dataset = "../SWE-Refactor/pure_refactoring_data.json"
+# Set RDP_DATASET in .env to the SWE-Refactor instance file.
 
 [agent]
 model = "claude-opus-4-8"
@@ -33,7 +32,7 @@ jobs = 3
 scan_timeout_s = 1800
 sonar_version = "25.1.0.102122"
 sonar_host = "http://localhost:9000"
-jdk17_home = "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+# Set RDP_JDK17_HOME in .env.
 ck_heap = "-Xmx4g"
 scanner_heap = "-Xmx2g"
 
@@ -42,7 +41,4 @@ jobs = 2
 timeout_s = 3600
 # JAVA_HOME per dataset `compileJDK` value.
 [verify.jdk_homes]
-"8" = "/opt/homebrew/opt/openjdk@8/libexec/openjdk.jdk/Contents/Home"
-"11" = "/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home"
-"17" = "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
-"21" = "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+# Set RDP_JDK8_HOME, RDP_JDK11_HOME, RDP_JDK17_HOME, and RDP_JDK21_HOME in .env.
