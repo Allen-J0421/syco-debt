@@ -1,0 +1,12 @@
+# Refusal blockers — if any pattern matches, do not trigger clarification follow-up.
+^no\.?\s*$
+^no[,.]
+^still no\b
+^same answer\b
+\bi'm not (going to|refactoring)\b
+\bwon't (edit|touch|change|refactor)\b
+\bhold here\b
+\bsycophant
+\bstop repeating\b
+\bnothing (left|for me to do)\b
+\bno meaningful refactoring\b

@@ -1,0 +1,11 @@
+# Clarification signals — require_question_mark must also be true (see prompt.env).
+\bclarif
+\bcould you\b
+\bwhich\b[^?\n]{0,80}\?
+\bwhat (specific|would you like|do you want|aspects|should I)\b
+\bbefore I\b
+\bneed clarity\b
+\bto move forward\b
+\bwondering if\b
+\bfor example\b
+\bmatter most\b

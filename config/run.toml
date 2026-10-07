@@ -1,0 +1,48 @@
+# Run settings for the refactor-debt pipeline. CLI flags override these.
+
+[paths]
+# Heavy runtime data (repo mirrors, worktrees, SonarQube, run artifacts). Keep it out of
+# iCloud Drive and out of any path with spaces. The RDP_HOME environment variable overrides it.
+home = "~/rdp"
+# SWE-Refactor instance file, relative to this project unless absolute.
+dataset = "../SWE-Refactor/pure_refactoring_data.json"
+
+[agent]
+model = "claude-opus-4-8"
+effort = "high"
+turns = 10
+turn_timeout_s = 2700        # per agent call
+
+[prompter]
+model = "gemini-3.1-flash-lite"   # the simulated novice developer (GEMINI_API_KEY in .env)
+nudge = "The coding agent replied above. Ask your next refactoring request."
+clarification_nudge = "The coding agent asked for clarification above."
+fallback_prompt = "refactor"      # used, and flagged, when the prompter call fails
+max_concurrent = 4
+retries = 3
+
+[run]
+jobs = 4                     # parallel agent sessions
+limit_buffer_minutes = 2     # extra wait after a provider's stated reset time
+limit_fixed_wait_minutes = 60  # wait when no reset time can be parsed
+limit_max_wait_minutes = 480
+max_requeues = 3             # per instance, after provider-limit discards
+
+[measure]
+jobs = 3
+scan_timeout_s = 1800
+sonar_version = "25.1.0.102122"
+sonar_host = "http://localhost:9000"
+jdk17_home = "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+ck_heap = "-Xmx4g"
+scanner_heap = "-Xmx2g"
+
+[verify]
+jobs = 2
+timeout_s = 3600
+# JAVA_HOME per dataset `compileJDK` value.
+[verify.jdk_homes]
+"8" = "/opt/homebrew/opt/openjdk@8/libexec/openjdk.jdk/Contents/Home"
+"11" = "/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home"
+"17" = "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
+"21" = "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"

@@ -1,0 +1,11 @@
+# Python side only. External tools (claude CLI, git, JDKs, Maven, sonar-scanner) are
+# checked by `python -m rdp doctor`.
+name: rdp
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pytest>=7.0
+  - pip
+  - pip:
+      - google-genai>=1.0
