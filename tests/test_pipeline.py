@@ -208,6 +208,7 @@ def test_measure_assemble_and_verify(tmp_path, upstream, repos, fake_claude, mon
     (jdk / "bin").mkdir(parents=True)
     (jdk / "bin" / "java").write_text("#!/bin/sh\n")
     monkeypatch.setenv("RDP_JDK17_HOME", str(jdk))
+    monkeypatch.setenv("RDP_VERIFY_SCRATCH", str(tmp_path / "verify-scratch"))
     cfg = tmp_path / "run.toml"
     base = (Path(__file__).resolve().parent.parent / "config" / "run.toml").read_text()
     cfg.write_text(base)
@@ -250,3 +251,23 @@ def test_measure_assemble_and_verify(tmp_path, upstream, repos, fake_claude, mon
     assert vcounts == {"pass": 2 * 4}                                    # versions 0, 1, 2 (first stop), 3
     assert verify_run(settings, repos, ctx.run_dir, instances, jobs=2) == {}   # resumes: nothing left
     assert assemble(settings, ctx.run_dir, instances)["verify"] == 8
+
+    # A recorded infrastructure failure is retained, then superseded by a successful retry.
+    verify_log = ctx.run_dir / "instances" / instances[0].instance_id / "verify.jsonl"
+    with verify_log.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"instance_id": instances[0].instance_id, "version": 0,
+                            "outcome": "no_jdk"}) + "\n")
+    assert verify_run(settings, repos, ctx.run_dir, instances, jobs=2) == {}
+    assert verify_run(settings, repos, ctx.run_dir, instances, jobs=2, retry_infra=True) == {"pass": 1}
+    assert len(read_jsonl(verify_log)) == 6
+    assert assemble(settings, ctx.run_dir, instances)["verify"] == 8
+    latest_verify = rows(ctx.run_dir / "tables" / "verify.csv")
+    assert all(r["outcome"] == "pass" for r in latest_verify)
+    assert all(r["baseline_outcome"] == "pass" and r["baseline_pass"] == "1"
+               for r in latest_verify)
+    retry_row = next(r for r in latest_verify if r["instance_id"] == instances[0].instance_id
+                     and r["version"] == "0")
+    assert retry_row["attempt"] == "3"
+    assert (verify_log.parent / retry_row["log_file"]).is_file()
+    assert verify_run(settings, repos, ctx.run_dir, instances[:1], jobs=1, recheck=True) == {"pass": 4}
+    assert len(read_jsonl(verify_log)) == 10

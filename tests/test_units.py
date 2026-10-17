@@ -22,10 +22,20 @@ from rdp.signals.compute import (
     instance_signals,
     refusal_edit_rate,
 )
-from rdp.verify import classify, versions_to_check
+from rdp.verify import classify, is_infrastructure_result, versions_to_check
 
 
 # ---- instances ------------------------------------------------------------------
+def test_verify_maven_home_from_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("RDP_MAVEN_HOME", str(tmp_path / "apache-maven"))
+    monkeypatch.setenv("RDP_VERIFY_SCRATCH", str(tmp_path / "verify-scratch"))
+    settings = load_settings()
+    assert settings.verify["maven_home"] == str(tmp_path / "apache-maven")
+    assert settings.verify_scratch_dir == tmp_path / "verify-scratch"
+    assert settings.verify["timeout_s"] == 3600
+    assert settings.verify["timeout_overrides"]["hibernate-orm-b53728f7-673d5e"] == 7200
+
+
 def test_selection_filters_and_is_deterministic():
     records = load_dataset(load_settings().dataset)
     assert len(records) == 1099
@@ -131,6 +141,15 @@ def test_effort_and_verify_helpers():
     assert classify(1, False, "There are test failures.") == "test_failure"
     assert classify(1, False, "something else") == "build_error"
     assert classify(124, True, "") == "timeout"
+    assert classify(127, False, "bash: mvn: command not found") == "missing_tool"
+    assert classify(2, False, "bash: -c: line 0: unexpected EOF while looking for matching `''") == "invalid_command"
+    assert classify(1, False, "compileJava FAILED: Could not load from remote cache: Not in GZIP format") == "build_error"
+    assert is_infrastructure_result({"outcome": "no_jdk"})
+    assert is_infrastructure_result({"outcome": "build_error", "returncode": 127,
+                                     "log_tail": "bash: mvn: command not found"})
+    assert is_infrastructure_result({"outcome": "build_error", "returncode": 2,
+                                     "log_tail": "unexpected EOF while looking for matching `''"})
+    assert not is_infrastructure_result({"outcome": "compile_error"})
     turns = [{"turn": 1, "lines_total": 4}, {"turn": 2, "lines_total": 0}, {"turn": 3, "lines_total": 2}]
     assert versions_to_check(turns) == [0, 1, 2, 3]
     assert versions_to_check(turns[:1] + [{"turn": 2, "lines_total": 1}]) == [0, 1, 2]

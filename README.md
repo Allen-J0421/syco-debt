@@ -27,10 +27,13 @@ python -m rdp doctor          # lists what each stage still needs
 |---|---|
 | run | `claude` CLI (authenticated), `GEMINI_API_KEY` in `.env` |
 | measure | `brew install openjdk@17 sonar-scanner`, then `python -m rdp setup-metrics` (downloads CK 0.7.0 and SonarQube 25.1 into `<home>/vendor`) |
-| verify | Maven and JDK 8, 11, 17, 21 (paths in `config/run.toml`) |
+| verify | Maven, JDK 8/11/17/21, and a writable case-sensitive scratch volume (`RDP_VERIFY_SCRATCH` in `.env`) |
 
 Runtime data lives in `~/rdp` by default (`RDP_HOME` or `--home` to change). Keep it out of iCloud Drive
 and out of paths with spaces: it holds full repository mirrors and one worktree per running instance.
+On a case-insensitive macOS volume, Java projects with classes that differ only by case can falsely fail
+tests. Mount a case-sensitive APFS scratch image before `verify`; `doctor` checks this, and `verify` refuses
+to run without a writable case-sensitive scratch directory. A mounted image must be reattached after reboot.
 
 ## Use
 
@@ -40,6 +43,7 @@ python -m rdp run     --run pilot --jobs 4         # agent sessions, 4 at a time
 python -m rdp status  --run pilot
 python -m rdp measure --run pilot --jobs 3         # SonarQube + CK on iterations 0-10 and the human version
 python -m rdp verify  --run pilot --jobs 2         # compile + tests on versions 0, 1, first stop, last
+python -m rdp verify  --run pilot --jobs 2 --retry-infra  # retry setup failures after fixing tools/JDKs
 python -m rdp assemble --run pilot                 # writes runs/pilot/tables/*.csv
 python -m rdp export  --run pilot --dest ../../data/swe_pilot
 ```
@@ -94,7 +98,7 @@ foundational harness), an extended per-turn record (`logs/*-turns.jsonl`), the p
 | `steps.csv` | instance x turn | lines added/deleted/total and files changed (whole repo, `.java` only, target file only), stop and stop-claim flags, clarification and prompter-fallback flags, duration, tokens, cost |
 | `signals.csv` | instance | first stop turn `t_star`, `never_stopped`, `relapsed`, post-stop lines, `s2_post_stop`, `s3_refusal_edit_rate`, `clean` |
 | `issues.csv` | instance x version x issue | SonarQube rule, severity, effort minutes, file, line |
-| `verify.csv` | instance x checked version | `pass`, `compile_error`, `test_failure`, `build_error`, `timeout`, `no_jdk` |
+| `verify.csv` | instance x checked version | build/test outcome, source and effective commands, attempt and log paths, plus `baseline_outcome` and `baseline_pass` |
 | `instances.csv` | instance | the selection |
 
 ## Definitions
@@ -112,6 +116,17 @@ foundational harness), an extended per-turn record (`logs/*-turns.jsonl`), the p
   changed or deleted. All versions of an instance are measured on this same set.
 - **Human version:** the baseline with the human refactoring's files taken from the human commit.
 - **`clean`:** 0 when any turn failed, lacks a transcript, or used the prompter's fallback prompt.
+- **Verification retries:** `verify.jsonl` keeps every attempt. `verify.csv` shows only the latest
+  outcome per version; `--retry-infra` rechecks missing-JDK, missing-tool, and malformed-command
+  outcomes without rerunning genuine compile or test failures. Per-instance command corrections
+  live in `[verify.command_overrides]` and longer limits for slow suites live in
+  `[verify.timeout_overrides]`, so the frozen manifest remains unchanged. New attempts save
+  full Maven output in each instance's `logs/` directory for diagnosis, and bundles test reports
+  when a build fails. To deliberately rerun all
+  versions of one subject, use `verify --run pilot --ids SUBJECT_ID --recheck`.
+- **Baseline validity:** `baseline_pass = 1` means the unchanged version 0 passed the same
+  verification command. A later failure with `baseline_pass = 0` must not be counted as an
+  agent-caused build/test regression without additional evidence.
 
 ## Limits
 

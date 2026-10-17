@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from rdp.config import Settings
@@ -17,6 +18,19 @@ def _version(cmd: list[str]) -> str:
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return ((proc.stdout or "") + (proc.stderr or "")).strip().splitlines()[0] if (proc.stdout or proc.stderr) else ""
+
+
+def case_sensitive_path(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        with tempfile.TemporaryDirectory(prefix="rdp-case-", dir=path) as probe:
+            lower, upper = Path(probe) / "rdp", Path(probe) / "RDP"
+            lower.write_bytes(b"lower")
+            upper.write_bytes(b"upper")
+            return lower.read_bytes() == b"lower" and upper.read_bytes() == b"upper"
+    except OSError:
+        return False
 
 
 def checks(settings: Settings) -> list[tuple[str, str, bool, str]]:
@@ -52,9 +66,15 @@ def checks(settings: Settings) -> list[tuple[str, str, bool, str]]:
         (settings.vendor_dir / "sonarqube" / "bin" / "macosx-universal-64" / "sonar.sh").is_file(),
         "python -m rdp setup-metrics")
 
-    add("verify", "Maven", shutil.which("mvn") is not None, "brew install maven")
+    maven_home = settings.verify.get("maven_home") or ""
+    maven_bin = Path(maven_home).expanduser() / "bin" / "mvn" if maven_home else None
+    add("verify", "Maven", bool(maven_bin and maven_bin.is_file()) or shutil.which("mvn") is not None,
+        str(maven_bin) if maven_bin else "brew install maven or set RDP_MAVEN_HOME")
     for label, path in sorted((settings.verify.get("jdk_homes") or {}).items(), key=lambda kv: int(kv[0])):
         add("verify", f"JDK {label}", (Path(path).expanduser() / "bin" / "java").is_file(), path)
+    verify_scratch = settings.verify_scratch_dir
+    add("verify", "case-sensitive scratch", case_sensitive_path(verify_scratch),
+        f"{verify_scratch} (set RDP_VERIFY_SCRATCH to a case-sensitive volume)")
     return out
 
 

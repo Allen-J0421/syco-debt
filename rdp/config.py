@@ -75,6 +75,10 @@ class Settings:
     def scratch_dir(self) -> Path:
         return self.home / "scratch"
 
+    @property
+    def verify_scratch_dir(self) -> Path:
+        return Path(self.verify.get("scratch_dir") or self.scratch_dir).expanduser()
+
     def run_dir(self, run: str) -> Path:
         return self.home / "runs" / run
 
@@ -100,6 +104,10 @@ def load_settings(config_path: Path | None = None, *, home: str | None = None) -
     if jdk17 := os.environ.get("RDP_JDK17_HOME"):
         measure["jdk17_home"] = jdk17
     verify = raw.setdefault("verify", {})
+    if maven_home := os.environ.get("RDP_MAVEN_HOME"):
+        verify["maven_home"] = maven_home
+    if verify_scratch := os.environ.get("RDP_VERIFY_SCRATCH"):
+        verify["scratch_dir"] = verify_scratch
     jdk_homes = verify.setdefault("jdk_homes", {})
     for version in ("8", "11", "17", "21"):
         if jdk_home := os.environ.get(f"RDP_JDK{version}_HOME"):

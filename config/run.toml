@@ -39,6 +39,37 @@ scanner_heap = "-Xmx2g"
 [verify]
 jobs = 2
 timeout_s = 3600
+# Set RDP_VERIFY_SCRATCH to a case-sensitive volume on macOS.
 # JAVA_HOME per dataset `compileJDK` value.
 [verify.jdk_homes]
 # Set RDP_JDK8_HOME, RDP_JDK11_HOME, RDP_JDK17_HOME, and RDP_JDK21_HOME in .env.
+
+# Verification-only corrections preserve the frozen manifest and original commands.
+# Checkstyle's CommitValidationTest checks repository commit messages, not source
+# behavior; exported snapshots intentionally have no .git directory.
+[verify.command_overrides]
+checkstyle-1ca66693-8fe3e8 = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -Dtest='!TestMessageReporter,!XpathRegressionTest,!XdocsPagesTest,!CommitValidationTest'"
+checkstyle-7a9913aa-cdd1b2 = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -Dtest='!TestMessageReporter,!XpathRegressionTest,!XdocsPagesTest,!CommitValidationTest'"
+checkstyle-a8f06573-eb4ff3 = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -Dtest='!TestMessageReporter,!XpathRegressionTest,!XdocsPagesTest,!CommitValidationTest'"
+# The SWE-Refactor dataset omits the closing quote in the Commons IO command.
+commons-io-153a91c1-bc86a0 = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -Dtest='!FileUtilsDeleteDirectoryLinuxTestCase,!ObservableInputStreamTest'"
+commons-io-a8ee7b9d-859822 = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -Dtest='!FileUtilsDeleteDirectoryLinuxTestCase,!ObservableInputStreamTest'"
+commons-io-c28eff3b-dd1dab = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -Dtest='!FileUtilsDeleteDirectoryLinuxTestCase,!ObservableInputStreamTest'"
+# The dataset's PMD commands contain Commons IO-specific -Dtest exclusions.
+# Run PMD's own test suite; some modules legitimately contain no tests.
+pmd-7af212fc-3aed61 = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -DfailIfNoTests=false"
+pmd-91d0ebf4-ffb340 = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -DfailIfNoTests=false"
+pmd-a643c3ce-70187c = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -DfailIfNoTests=false"
+pmd-e9ecc8aa-91e4ac = "mvn clean package -Drat.skip=true -Dmaven.javadoc.skip=true -DfailIfNoTests=false"
+# Hibernate's remote Gradle cache supplied malformed entries during baseline
+# verification. Disable build caching for these verification-only exports.
+hibernate-orm-b53728f7-673d5e = "./gradlew --no-build-cache clean build"
+hibernate-orm-ba05533a-bf18b6 = "./gradlew --no-build-cache clean build"
+hibernate-orm-f8a6106e-f8aa39 = "./gradlew --no-build-cache clean build"
+
+# Full Hibernate test suites exceeded the normal one-hour per-version limit
+# while still running tests. Keep other subjects at the default timeout.
+[verify.timeout_overrides]
+hibernate-orm-b53728f7-673d5e = 7200
+hibernate-orm-ba05533a-bf18b6 = 7200
+hibernate-orm-f8a6106e-f8aa39 = 7200

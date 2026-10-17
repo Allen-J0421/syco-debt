@@ -47,7 +47,9 @@ SIGNAL_COLUMNS = [
     "s3_refusal_edit_rate", "failed_turns", "turns_without_transcript", "prompter_fallbacks", "clean",
 ]
 ISSUE_COLUMNS = ["instance_id", "version", "rule", "severity", "effort_min", "file", "line", "message"]
-VERIFY_COLUMNS = ["instance_id", "version", "commit", "jdk", "outcome", "returncode", "duration_s", "command"]
+VERIFY_COLUMNS = ["instance_id", "version", "commit", "jdk", "outcome", "returncode", "duration_s",
+                  "command", "source_command", "attempt", "log_file", "report_archive",
+                  "baseline_outcome", "baseline_pass"]
 
 
 def _write(path: Path, columns: list[str], rows: list[dict]) -> None:
@@ -136,7 +138,12 @@ def assemble(settings: Settings, run_dir: Path, instances: list[Instance]) -> di
             if data.state.prompter_fallbacks:
                 signal_rows[-1]["clean"] = 0   # a fallback prompt changed the treatment
 
-        verify_rows.extend(read_jsonl(data.dir / "verify.jsonl"))
+        # The raw JSONL retains every retry for audit; tables show the latest result per version.
+        latest_verify = {int(row["version"]): row for row in read_jsonl(data.dir / "verify.jsonl")}
+        baseline_outcome = latest_verify.get(0, {}).get("outcome", "")
+        verify_rows.extend({**row, "baseline_outcome": baseline_outcome,
+                            "baseline_pass": int(baseline_outcome == "pass")}
+                           for row in latest_verify.values())
 
     metrics_rows.sort(key=lambda r: (r["unit"], r["arm"], int(r["iteration"] or 0)))
     _write(tables / "metrics.csv", METRICS_COLUMNS, metrics_rows)

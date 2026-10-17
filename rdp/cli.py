@@ -268,11 +268,20 @@ def cmd_measure(args) -> int:
 def cmd_verify(args) -> int:
     from rdp.verify import verify_run
 
+    if args.recheck and not args.ids:
+        raise SystemExit("--recheck requires --ids to limit the subjects rebuilt")
     settings = _settings(args)
+    if not settings.verify.get("scratch_dir"):
+        settings.verify_scratch_dir.mkdir(parents=True, exist_ok=True)
+    if not doctor.case_sensitive_path(settings.verify_scratch_dir):
+        raise SystemExit(f"verification scratch must be writable and case-sensitive: "
+                         f"{settings.verify_scratch_dir} (set RDP_VERIFY_SCRATCH)")
     counts = verify_run(settings, _repos(settings), _run_dir(settings, args), _manifest(settings, args),
-                        jobs=args.jobs or int(settings.verify.get("jobs", 2)))
+                        jobs=args.jobs or int(settings.verify.get("jobs", 2)),
+                        retry_infra=args.retry_infra, recheck=args.recheck)
     print("verify: " + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "nothing to do"))
-    return 0
+    return 1 if any(counts.get(k, 0) for k in
+                    ("no_jdk", "no_command", "missing_tool", "invalid_command")) else 0
 
 
 def cmd_assemble(args) -> int:
@@ -382,7 +391,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = add("measure", cmd_measure, "SonarQube + CK on every version of every finished instance",
              select=True, jobs=True)
     sp.add_argument("--stop-server", action="store_true", help="stop SonarQube afterwards")
-    add("verify", cmd_verify, "compile and test selected versions", select=True, jobs=True)
+    sp = add("verify", cmd_verify, "compile and test selected versions", select=True, jobs=True)
+    sp.add_argument("--retry-infra", action="store_true",
+                    help="retry recorded missing-tool, missing-JDK and invalid-command checks")
+    sp.add_argument("--recheck", action="store_true",
+                    help="rerun all checked versions for the specified --ids, retaining earlier attempts")
     add("assemble", cmd_assemble, "build metrics/steps/signals/issues/verify tables", select=True)
     add("signals", cmd_assemble, "alias of assemble (signals need no metrics)", select=True)
     sp = add("label-sample", cmd_label_sample, "sheet for hand-checking the stop-claim detector", select=True)
